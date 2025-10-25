@@ -37,7 +37,7 @@ def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
 def is_valid_lead_url(url):
-    """Verifica che sia un URL valido per un lead aziendale"""
+    """Verifica che sia un URL valido per un lead aziendale ITALIANO"""
     if not url or not url.startswith('http'):
         return False
     
@@ -59,6 +59,17 @@ def is_valid_lead_url(url):
         
         # Deve avere un dominio valido
         if '.' not in domain or domain.startswith('localhost'):
+            return False
+        
+        # ✅ FILTRO ITALIA: Accetta solo domini .it o siti italiani noti
+        is_italian = (
+            domain.endswith('.it') or  # Domini .it
+            '/it/' in path or  # Path /it/
+            '/italia/' in path or  # Path /italia/
+            any(city in domain for city in ['roma', 'milano', 'torino', 'napoli', 'firenze', 'bologna'])  # Città italiane nel dominio
+        )
+        
+        if not is_italian:
             return False
             
         return True
@@ -165,8 +176,8 @@ async def analyze_landing_page(url, session):
         return None
 
 async def scrape_meta_ads(query, max_results=50):
-    """Scrape Meta Ads Library per trovare advertiser reali"""
-    logger.info(f"Scraping Meta Ads Library for: {query}")
+    """Scrape Meta Ads Library per trovare advertiser ITALIANI"""
+    logger.info(f"Scraping Meta Ads Library for ITALIAN leads: {query}")
     results = []
     
     try:
@@ -174,14 +185,15 @@ async def scrape_meta_ads(query, max_results=50):
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent=get_random_user_agent(),
-                viewport={'width': 1920, 'height': 1080}
+                viewport={'width': 1920, 'height': 1080},
+                locale='it-IT'  # Locale italiano
             )
             page = await context.new_page()
             
-            # URL della Meta Ads Library
-            search_url = f"https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&q={quote_plus(query)}&search_type=keyword_unordered"
+            # URL della Meta Ads Library - SOLO ITALIA
+            search_url = f"https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=IT&q={quote_plus(query)}&search_type=keyword_unordered"
             
-            logger.info(f"Navigating to Meta Ads Library...")
+            logger.info(f"Navigating to Meta Ads Library (Italy only)...")
             await page.goto(search_url, timeout=45000, wait_until='domcontentloaded')
             await page.wait_for_timeout(5000)
             
@@ -215,13 +227,13 @@ async def scrape_meta_ads(query, max_results=50):
                     
                     if seen_domains[domain] < 3:
                         results.append({
-                            'platform': 'Meta Ads',
+                            'platform': 'Meta Ads Italy',
                             'url': href,
                             'query': query,
                             'found_at': datetime.now().isoformat()
                         })
                         seen_domains[domain] += 1
-                        logger.info(f"Found lead: {href}")
+                        logger.info(f"Found Italian lead: {href}")
                 
                 if len(results) >= max_results:
                     break
@@ -231,12 +243,12 @@ async def scrape_meta_ads(query, max_results=50):
     except Exception as e:
         logger.error(f"Meta Ads error: {str(e)}")
     
-    logger.info(f"Meta Ads: {len(results)} leads found")
+    logger.info(f"Meta Ads Italy: {len(results)} leads found")
     return results
 
 async def scrape_reddit(query, max_results=50):
-    """Scrape Reddit per trovare link aziendali in post e commenti"""
-    logger.info(f"Scraping Reddit for: {query}")
+    """Scrape Reddit per trovare link aziendali ITALIANI"""
+    logger.info(f"Scraping Reddit for ITALIAN leads: {query}")
     results = []
     
     try:
@@ -245,8 +257,9 @@ async def scrape_reddit(query, max_results=50):
             context = await browser.new_context(user_agent=get_random_user_agent())
             page = await context.new_page()
             
-            # Usa old.reddit per parsing più facile
-            search_url = f"https://old.reddit.com/search?q={quote_plus(query)}&sort=relevance&t=all"
+            # Cerca in subreddit italiani + query generale con filtro "site:.it"
+            italian_query = f"{query} (site:.it OR subreddit:italy OR subreddit:ItalyInformatica)"
+            search_url = f"https://old.reddit.com/search?q={quote_plus(italian_query)}&sort=relevance&t=all"
             
             await page.goto(search_url, timeout=30000)
             await page.wait_for_timeout(3000)
@@ -276,13 +289,13 @@ async def scrape_reddit(query, max_results=50):
                         
                         if seen_domains[domain] < 3:
                             results.append({
-                                'platform': 'Reddit',
+                                'platform': 'Reddit Italy',
                                 'url': href,
                                 'query': query,
                                 'found_at': datetime.now().isoformat()
                             })
                             seen_domains[domain] += 1
-                            logger.info(f"Found lead: {href}")
+                            logger.info(f"Found Italian lead: {href}")
                 
                 if len(results) >= max_results:
                     break
@@ -292,23 +305,26 @@ async def scrape_reddit(query, max_results=50):
     except Exception as e:
         logger.error(f"Reddit error: {str(e)}")
     
-    logger.info(f"Reddit: {len(results)} leads found")
+    logger.info(f"Reddit Italy: {len(results)} leads found")
     return results
 
 async def scrape_google_search(query, max_results=30):
-    """Scrape Google per trovare aziende rilevanti"""
-    logger.info(f"Scraping Google for: {query}")
+    """Scrape Google per trovare aziende ITALIANE"""
+    logger.info(f"Scraping Google for ITALIAN leads: {query}")
     results = []
     
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(user_agent=get_random_user_agent())
+            context = await browser.new_context(
+                user_agent=get_random_user_agent(),
+                locale='it-IT'
+            )
             page = await context.new_page()
             
-            # Aggiungi parole chiave commerciali alla query
-            commercial_query = f"{query} service company business"
-            search_url = f"https://www.google.com/search?q={quote_plus(commercial_query)}&num=50"
+            # Query ottimizzata per ITALIA
+            commercial_query = f"{query} azienda servizio italia site:.it"
+            search_url = f"https://www.google.it/search?q={quote_plus(commercial_query)}&num=50&hl=it&gl=it"
             
             await page.goto(search_url, timeout=30000)
             await page.wait_for_timeout(3000)
@@ -320,7 +336,7 @@ async def scrape_google_search(query, max_results=30):
             
             # Estrai risultati di ricerca
             search_results = soup.find_all('div', class_='g')
-            logger.info(f"Found {len(search_results)} Google results")
+            logger.info(f"Found {len(search_results)} Google Italy results")
             
             for result in search_results:
                 link_elem = result.find('a', href=True)
@@ -336,13 +352,13 @@ async def scrape_google_search(query, max_results=30):
                         
                         if seen_domains[domain] < 2:
                             results.append({
-                                'platform': 'Google Search',
+                                'platform': 'Google Italy',
                                 'url': href,
                                 'query': query,
                                 'found_at': datetime.now().isoformat()
                             })
                             seen_domains[domain] += 1
-                            logger.info(f"Found lead: {href}")
+                            logger.info(f"Found Italian lead: {href}")
                 
                 if len(results) >= max_results:
                     break
@@ -352,7 +368,7 @@ async def scrape_google_search(query, max_results=30):
     except Exception as e:
         logger.error(f"Google Search error: {str(e)}")
     
-    logger.info(f"Google: {len(results)} leads found")
+    logger.info(f"Google Italy: {len(results)} leads found")
     return results
 
 async def scrape_all_platforms(query):
