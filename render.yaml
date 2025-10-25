@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: lead-scraper-pro
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /ms-playwright
+    healthCheckPath: /
+    autoDeploy: true
