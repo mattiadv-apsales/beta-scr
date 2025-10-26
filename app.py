@@ -276,7 +276,7 @@ async def scrape_meta_ads_advanced(query, max_results=100):
             max_empty_scrolls = 5
             oggi = datetime.today().date()
             # Accetta annunci degli ultimi 30 giorni invece di solo ieri
-            limite_data = oggi - timedelta(days=30)
+            limite_data = oggi - timedelta(days=5)
             
             # Scroll intelligente
             for scroll_num in range(20):  # Max 20 scroll
