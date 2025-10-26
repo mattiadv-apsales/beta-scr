@@ -491,22 +491,38 @@ def scrape():
         
         logger.info(f"🚀 Starting advanced scrape for: {query}")
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        results = loop.run_until_complete(scrape_all_platforms(query))
-        loop.close()
+        # Usa thread-safe event loop
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            results = loop.run_until_complete(scrape_all_platforms(query))
+        finally:
+            loop.close()
         
         scraped_data = results
         
-        return jsonify({
+        logger.info(f"✅ Scraping completato: {len(results)} lead trovati")
+        
+        response = jsonify({
             'success': True,
             'count': len(results),
             'leads': results
         })
         
+        # Headers per evitare problemi di streaming
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        
+        return response
+        
     except Exception as e:
         logger.error(f"Scrape error: {str(e)}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'count': 0,
+            'leads': []
+        }), 500
 
 @app.route('/export/csv')
 def export_csv():
