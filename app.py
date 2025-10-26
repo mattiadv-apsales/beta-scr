@@ -54,7 +54,7 @@ def decode_fb_redirect(href):
     return href
 
 def is_valid_lead_url(url):
-    """Verifica che sia un URL valido - FILTRO SOFT"""
+    """Verifica che sia un URL valido - FILTRO SOFT ma senza Google Forms"""
     if not url or not url.startswith('http'):
         return False
     
@@ -63,14 +63,21 @@ def is_valid_lead_url(url):
         domain = parsed.netloc.lower()
         path = parsed.path.lower()
         
-        # Blocca SOLO social network principali e metastatus
-        blocked_social = ['facebook.com', 'fb.com', 'fb.me', 'instagram.com', 
-                         'twitter.com', 'x.com', 'youtube.com', 'tiktok.com', 
-                         'linkedin.com/in/', 'metastatus.com']
-        if any(blocked in domain or blocked in url.lower() for blocked in blocked_social):
+        # Blocca social network, forms e utility
+        blocked_domains = [
+            'facebook.com', 'fb.com', 'fb.me', 'instagram.com', 
+            'twitter.com', 'x.com', 'youtube.com', 'tiktok.com', 
+            'linkedin.com/in/', 'metastatus.com',
+            'forms.gle', 'google.com/forms',  # Google Forms
+            'docs.google.com/forms',  # Google Forms alternate
+            'typeform.com', 'surveymonkey.com',  # Altri form builders
+        ]
+        
+        url_lower = url.lower()
+        if any(blocked in domain or blocked in url_lower for blocked in blocked_domains):
             return False
         
-        # Blocca SOLO path pericolosi
+        # Blocca path pericolosi
         blocked_paths = ['/login', '/signin', '/register', '/auth']
         if any(blocked in path for blocked in blocked_paths):
             return False
@@ -79,7 +86,6 @@ def is_valid_lead_url(url):
         if '.' not in domain or domain.startswith('localhost'):
             return False
         
-        # ACCETTA TUTTO il resto
         return True
             
     except:
@@ -501,7 +507,7 @@ async def scrape_google_italy(query, max_results=10):
                 await page.goto(search_url, timeout=45000, wait_until='domcontentloaded')
                 await page.wait_for_timeout(4000)
             except:
-                print("hjgjkhgkjhgkg")
+                print("LOL questa stringa mancava")
             
             content = await page.content()
             soup = BeautifulSoup(content, 'html.parser')
