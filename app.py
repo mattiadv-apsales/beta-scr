@@ -65,7 +65,7 @@ def is_valid_lead_url(url):
         # Blocca path di utility
         blocked_paths = ['/login', '/signin', '/signup', '/register', '/auth', 
                         '/terms', '/privacy', '/cookie', '/legal', '/support',
-                        '/help', '/faq', '/about-us/contact', '/contact-us/support']
+                        '/help', '/faq']
         if any(blocked in path for blocked in blocked_paths):
             return False
         
@@ -73,13 +73,24 @@ def is_valid_lead_url(url):
         if '.' not in domain or domain.startswith('localhost'):
             return False
         
-        # ✅ FILTRO ITALIA: Domini .it o path italiani
+        # ✅ FILTRO ITALIA MIGLIORATO: Più permissivo
         is_italian = (
-            domain.endswith('.it') or
-            '/it/' in path or
+            domain.endswith('.it') or  # Domini .it
+            '/it/' in path or '/it-it/' in path or  # Path italiano
             '/italia/' in path or
-            any(city in domain for city in ['roma', 'milano', 'torino', 'napoli', 'firenze', 'bologna', 'venezia', 'palermo'])
+            # Città italiane maggiori
+            any(city in domain for city in [
+                'roma', 'milano', 'torino', 'napoli', 'firenze', 
+                'bologna', 'venezia', 'palermo', 'genova', 'bari'
+            ])
         )
+        
+        # Se non è chiaramente italiano, controlla se è un dominio internazionale con versione italiana
+        if not is_italian:
+            # Accetta .com/.net se hanno indicatori italiani nel path
+            if any(tld in domain for tld in ['.com', '.net', '.org', '.eu']):
+                if '/it' in path or '/ita' in path or 'italia' in path.lower():
+                    is_italian = True
         
         if not is_italian:
             return False
@@ -264,9 +275,10 @@ async def scrape_meta_ads_advanced(query, max_results=100):
             empty_scrolls = 0
             max_empty_scrolls = 5
             oggi = datetime.today().date()
-            ieri = oggi - timedelta(days=1)
+            # Accetta annunci degli ultimi 30 giorni invece di solo ieri
+            limite_data = oggi - timedelta(days=30)
             
-            # Scroll intelligente con stop su annunci vecchi
+            # Scroll intelligente
             for scroll_num in range(20):  # Max 20 scroll
                 logger.info(f"📜 Scroll {scroll_num + 1}...")
                 
@@ -276,18 +288,31 @@ async def scrape_meta_ads_advanced(query, max_results=100):
                 
                 # Trova container annunci (selector dal tuo script)
                 annunci = soup.find_all('div', class_='xh8yej3')
+                logger.info(f"📦 Trovati {len(annunci)} annunci in questa pagina")
                 
                 before_count = len(external_urls)
                 stop_scraping = False
+                ads_too_old = 0
                 
                 for annuncio in annunci:
                     # Estrai data pubblicazione
                     data_pub = extract_date_from_ad(annuncio.get_text())
                     
-                    if data_pub and data_pub < ieri:
-                        logger.info(f"⏹️ Annuncio del {data_pub}, più vecchio di ieri. Stop.")
-                        stop_scraping = True
-                        break
+                    # Log della data trovata
+                    if data_pub:
+                        logger.info(f"📅 Annuncio del: {data_pub}")
+                    
+                    # Stop solo se troppo vecchi (>30 giorni)
+                    if data_pub and data_pub < limite_data:
+                        ads_too_old += 1
+                        # Se troviamo 5+ annunci vecchi consecutivi, stop
+                        if ads_too_old >= 5:
+                            logger.info(f"⏹️ Trovati {ads_too_old} annunci più vecchi di 30 giorni. Stop.")
+                            stop_scraping = True
+                            break
+                        continue  # Salta questo annuncio ma continua
+                    else:
+                        ads_too_old = 0  # Reset counter
                     
                     # Estrai tutti i link
                     links = annuncio.find_all('a', href=True)
@@ -300,6 +325,7 @@ async def scrape_meta_ads_advanced(query, max_results=100):
                         
                         if is_valid_lead_url(href):
                             external_urls.add(href)
+                            logger.info(f"✅ Lead trovato: {href}")
                 
                 if stop_scraping:
                     break
