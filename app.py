@@ -54,7 +54,7 @@ def decode_fb_redirect(href):
     return href
 
 def is_valid_lead_url(url):
-    """Verifica che sia un URL valido per un lead aziendale ITALIANO"""
+    """Verifica che sia un URL valido - FILTRO SOFT"""
     if not url or not url.startswith('http'):
         return False
     
@@ -63,14 +63,14 @@ def is_valid_lead_url(url):
         domain = parsed.netloc.lower()
         path = parsed.path.lower()
         
-        # Blocca domini social e utility
-        if any(blocked in domain for blocked in BLOCKED_DOMAINS):
+        # Blocca SOLO social network principali
+        blocked_social = ['facebook.com', 'fb.com', 'instagram.com', 'twitter.com', 
+                         'x.com', 'youtube.com', 'tiktok.com', 'linkedin.com/in/']
+        if any(blocked in domain for blocked in blocked_social):
             return False
         
-        # Blocca path di utility
-        blocked_paths = ['/login', '/signin', '/signup', '/register', '/auth', 
-                        '/terms', '/privacy', '/cookie', '/legal', '/support',
-                        '/help', '/faq', '/cart', '/checkout']
+        # Blocca SOLO path pericolosi
+        blocked_paths = ['/login', '/signin', '/register', '/auth']
         if any(blocked in path for blocked in blocked_paths):
             return False
         
@@ -78,23 +78,8 @@ def is_valid_lead_url(url):
         if '.' not in domain or domain.startswith('localhost'):
             return False
         
-        # FILTRO ITALIA ESTESO (.it, .com, .org)
-        valid_tlds = ['.it', '.com', '.org', '.net', '.eu']
-        has_valid_tld = any(domain.endswith(tld) for tld in valid_tlds)
-        
-        if not has_valid_tld:
-            return False
-        
-        # Indicatori Italia
-        is_italian = (
-            domain.endswith('.it') or
-            '/it/' in path or '/it-it/' in path or
-            '/italia/' in path or
-            any(city in domain for city in ITALIAN_CITIES) or
-            ('/it' in path or '/ita' in path or 'italia' in path.lower())
-        )
-        
-        return is_italian
+        # ACCETTA TUTTO - nessun filtro geografico restrittivo
+        return True
             
     except:
         return False
@@ -358,26 +343,8 @@ async def scrape_meta_ads_advanced(query, max_results=10):
                 annunci = soup.find_all('div', class_='xh8yej3')
                 logger.info(f"📦 Annunci: {len(annunci)}")
                 
-                stop_scraping = False
-                ads_too_old = 0
-                
                 for annuncio in annunci:
-                    data_pub = extract_date_from_ad(annuncio.get_text())
-                    
-                    if data_pub:
-                        logger.info(f"📅 Data: {data_pub}")
-                    
-                    # Stop se troppo vecchi
-                    if data_pub and data_pub < limite_data:
-                        ads_too_old += 1
-                        if ads_too_old >= 3:
-                            logger.info(f"⏹️ Annunci > 3 giorni, stop")
-                            stop_scraping = True
-                            break
-                        continue
-                    else:
-                        ads_too_old = 0
-                    
+                    # NON blocchiamo più per data - prendiamo tutti i link
                     links = annuncio.find_all('a', href=True)
                     for link in links:
                         href = link.get('href', '')
@@ -389,7 +356,8 @@ async def scrape_meta_ads_advanced(query, max_results=10):
                             external_urls.add(href)
                             logger.info(f"✅ Lead: {href}")
                 
-                if stop_scraping or len(external_urls) >= max_results:
+                if len(external_urls) >= max_results:
+                    logger.info(f"🎯 Raggiunto limite {max_results}")
                     break
                 
                 await page.evaluate('window.scrollBy(0, 800)')
@@ -438,30 +406,42 @@ async def scrape_linkedin_italy(query, max_results=10):
                 content = await page.content()
                 soup = BeautifulSoup(content, 'html.parser')
                 
-                # Cerca link aziende
-                company_links = soup.find_all('a', href=re.compile(r'/company/'))
+                # Cerca link aziende (selettori multipli)
+                company_links = []
+                company_links += soup.find_all('a', href=re.compile(r'/company/'))
+                company_links += soup.find_all('a', {'data-test-app-aware-link': True})
                 
                 seen_companies = set()
                 
                 for link in company_links:
                     href = link.get('href', '')
                     
-                    if '/company/' in href and 'linkedin.com' in href:
-                        # Estrai URL pulito
+                    # Accetta sia link company che website esterni
+                    if '/company/' in href:
                         company_url = href.split('?')[0]
+                        if 'linkedin.com' not in company_url:
+                            company_url = 'https://www.linkedin.com' + company_url
                         
                         if company_url not in seen_companies:
                             seen_companies.add(company_url)
-                            
-                            # Cerca website nella pagina company (se accessibile)
                             results.append({
                                 'platform': 'LinkedIn Italy',
                                 'url': company_url,
                                 'query': query,
                                 'found_at': datetime.now().isoformat()
                             })
-                            
                             logger.info(f"✅ Company: {company_url}")
+                    
+                    elif href.startswith('http') and is_valid_lead_url(href):
+                        if href not in seen_companies:
+                            seen_companies.add(href)
+                            results.append({
+                                'platform': 'LinkedIn Italy',
+                                'url': href,
+                                'query': query,
+                                'found_at': datetime.now().isoformat()
+                            })
+                            logger.info(f"✅ External: {href}")
                     
                     if len(results) >= max_results:
                         break
@@ -495,8 +475,10 @@ async def scrape_google_italy(query, max_results=10):
             search_url = f"https://www.google.it/search?q={quote_plus(commercial_query)}&num=30&hl=it&gl=it"
             
             logger.info(f"📍 URL: {search_url}")
-            await page.goto(search_url, timeout=30000)
-            await page.wait_for_timeout(3000)
+            
+            try:
+                await page.goto(search_url, timeout=45000, wait_until='domcontentloaded')
+                await page.wait_for_timeout(4000)
             
             content = await page.content()
             soup = BeautifulSoup(content, 'html.parser')
