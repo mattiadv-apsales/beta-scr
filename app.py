@@ -5,11 +5,11 @@ import json
 import csv
 import io
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from urllib.parse import urlparse, urljoin, quote_plus, parse_qs, unquote
 import random
 import logging
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 import aiohttp
 from collections import defaultdict
@@ -23,258 +23,89 @@ scraped_data = []
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
 ]
 
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
 def decode_fb_redirect(href):
-    """Decodifica redirect di Facebook (l.facebook.com)"""
     try:
         parsed = urlparse(href)
         qs = parse_qs(parsed.query)
         for key in ('u', 'url', 'href'):
             if key in qs and qs[key]:
                 return unquote(qs[key][0])
-    except Exception:
+    except:
         pass
     return href
 
 def is_valid_lead_url(url):
-    """Verifica che sia un URL valido - FILTRO SOFT"""
     if not url or not url.startswith('http'):
         return False
     
     try:
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-        path = parsed.path.lower()
+        domain = urlparse(url).netloc.lower()
+        blocked = ['facebook.com', 'fb.com', 'instagram.com', 'twitter.com', 
+                  'x.com', 'youtube.com', 'forms.gle', 'google.com/forms']
         
-        # Blocca solo social network principali e forms
-        blocked_domains = [
-            'facebook.com', 'fb.com', 'fb.me', 'instagram.com', 
-            'twitter.com', 'x.com', 'youtube.com', 'tiktok.com', 
-            'linkedin.com/in/', 'metastatus.com',
-            'forms.gle', 'google.com/forms',
-            'docs.google.com/forms',
-            'typeform.com', 'surveymonkey.com',
-        ]
-        
-        url_lower = url.lower()
-        if any(blocked in domain or blocked in url_lower for blocked in blocked_domains):
+        if any(b in domain for b in blocked):
             return False
-        
-        # Blocca path pericolosi
-        blocked_paths = ['/login', '/signin', '/register', '/auth']
-        if any(blocked in path for blocked in blocked_paths):
-            return False
-        
-        if '.' not in domain or domain.startswith('localhost'):
+        if '.' not in domain:
             return False
         
         return True
-            
     except:
         return False
 
 def extract_emails(text):
-    """Estrai email valide"""
     pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
     emails = re.findall(pattern, text)
-    valid_emails = [
-        e for e in set(emails) 
-        if not any(x in e.lower() for x in ['example.com', 'test.com', 'domain.com', 'mail.com'])
-    ]
-    return valid_emails[:5]
+    return [e for e in set(emails) if 'example.com' not in e.lower()][:3]
 
 def extract_phones(text):
-    """Estrai numeri di telefono italiani e internazionali"""
     patterns = [
         r'\+39[\s-]?\d{2,3}[\s-]?\d{3,4}[\s-]?\d{3,4}',
         r'\b0\d{1,3}[\s-]?\d{3,4}[\s-]?\d{3,4}\b',
         r'\b3\d{2}[\s-]?\d{3}[\s-]?\d{3,4}\b',
-        r'\+?\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}',
     ]
     phones = []
     for pattern in patterns:
-        found = re.findall(pattern, text)
-        phones.extend([p for p in found if len(re.sub(r'\D', '', p)) >= 9])
-    return list(set(phones))[:5]
+        phones.extend([p for p in re.findall(pattern, text) if len(re.sub(r'\D', '', p)) >= 9])
+    return list(set(phones))[:3]
 
-def analyze_sentiment_tone(text):
-    """Analisi sentiment e tone of voice"""
-    if not text or len(text) < 50:
-        return {
-            'sentiment_score': 0,
-            'tone': 'unknown',
-            'professionalism': 0,
-            'persuasiveness': 0
-        }
-    
-    text_lower = text.lower()
-    
-    positive_words = ['eccellente', 'ottimo', 'migliore', 'garantito', 'successo', 
-                     'innovativo', 'leader', 'qualità', 'professionale', 'affidabile']
-    negative_words = ['problema', 'difficoltà', 'errore', 'fallimento', 'negativo']
-    
-    pos_count = sum(1 for word in positive_words if word in text_lower)
-    neg_count = sum(1 for word in negative_words if word in text_lower)
-    
-    sentiment_score = min((pos_count - neg_count + 5), 10)
-    
-    formal_indicators = ['inoltre', 'pertanto', 'qualora', 'mediante', 'gentile cliente']
-    casual_indicators = ['ciao', 'hey', 'dai', 'fantastico', 'wow']
-    commercial_indicators = ['acquista', 'offerta', 'sconto', 'risparmia', 'promo']
-    
-    formal_count = sum(1 for word in formal_indicators if word in text_lower)
-    casual_count = sum(1 for word in casual_indicators if word in text_lower)
-    commercial_count = sum(1 for word in commercial_indicators if word in text_lower)
-    
-    if commercial_count > formal_count and commercial_count > casual_count:
-        tone = 'commercial'
-    elif formal_count > casual_count:
-        tone = 'formal'
-    elif casual_count > 0:
-        tone = 'casual'
-    else:
-        tone = 'neutral'
-    
-    prof_indicators = ['esperienza', 'competenza', 'certificato', 'qualificato', 
-                      'professionale', 'team', 'consulenza']
-    professionalism = min(sum(1 for word in prof_indicators if word in text_lower) * 2, 10)
-    
-    persuasive_indicators = ['prova', 'scopri', 'richiedi', 'garantito', 'limitato', 
-                            'esclusivo', 'gratis', 'ora']
-    persuasiveness = min(sum(1 for word in persuasive_indicators if word in text_lower) * 1.5, 10)
-    
-    return {
-        'sentiment_score': max(0, sentiment_score),
-        'tone': tone,
-        'professionalism': professionalism,
-        'persuasiveness': int(persuasiveness)
-    }
-
-def calculate_copy_quality(text):
-    """Valuta qualità del copy (0-10)"""
-    if not text or len(text) < 50:
-        return 0
-    
-    score = 0
-    text_lower = text.lower()
-    
-    if 100 < len(text) < 2000:
-        score += 2
-    
-    cta_words = ['acquista', 'compra', 'prova', 'inizia', 'iscriviti', 
-                 'scarica', 'scopri', 'contatta', 'richiedi', 'prenota']
-    cta_count = sum(1 for word in cta_words if word in text_lower)
-    if cta_count >= 2:
-        score += 3
-    
-    benefit_words = ['risparmia', 'aumenta', 'migliora', 'ottimizza', 
-                    'facile', 'veloce', 'professionale', 'garantito', 'gratis']
-    benefit_count = sum(1 for word in benefit_words if word in text_lower)
-    if benefit_count >= 2:
-        score += 3
-    
-    urgency_words = ['ora', 'oggi', 'limitato', 'offerta', 'scadenza', 'solo']
-    if any(word in text_lower for word in urgency_words):
-        score += 2
-    
-    return min(score, 10)
-
-async def analyze_landing_page(url, session):
-    """Analizza landing page per estrarre dati di contatto, metriche e sentiment"""
+async def quick_analyze(url, session):
+    """Analisi VELOCISSIMA (5s timeout)"""
     try:
-        logger.info(f"🔍 Analyzing: {url}")
-        
         async with session.get(
             url, 
-            timeout=aiohttp.ClientTimeout(total=12), 
+            timeout=aiohttp.ClientTimeout(total=5),
             headers={'User-Agent': get_random_user_agent()},
             allow_redirects=True
         ) as response:
-            
             if response.status != 200:
-                logger.warning(f"❌ Status {response.status} for {url}")
                 return None
             
             html = await response.text()
             soup = BeautifulSoup(html, 'html.parser')
-            
-            text = soup.get_text(separator=' ', strip=True)
+            text = soup.get_text(separator=' ', strip=True)[:1500]
             
             emails = extract_emails(text)
             phones = extract_phones(text)
-            
-            contact_links = []
-            for link in soup.find_all('a', href=True):
-                href = link['href'].lower()
-                link_text = link.get_text().lower()
-                
-                if any(kw in href or kw in link_text for kw in ['contatt', 'chi-siamo', 'about', 'azienda']):
-                    full_url = urljoin(url, link['href'])
-                    if is_valid_lead_url(full_url):
-                        contact_links.append(full_url)
-            
             has_form = bool(soup.find('form'))
-            has_schema = bool(soup.find('script', type='application/ld+json'))
             
-            cta_elements = soup.find_all(['button', 'a'], class_=re.compile(r'cta|button|btn', re.I))
-            cta_elements += soup.find_all(
-                ['a', 'button'], 
-                string=re.compile(r'contatt|acquista|prenota|richiedi|scopri', re.I)
-            )
-            has_cta = len(cta_elements) > 0
-            
-            copy_quality = calculate_copy_quality(text[:3000])
-            sentiment_data = analyze_sentiment_tone(text[:3000])
-            
-            score = 0
-            if emails: 
-                score += 3
-            if phones: 
-                score += 3
-            if contact_links: 
-                score += 2
-            if has_form: 
-                score += 2
-            if has_cta:
-                score += 1
-            if copy_quality >= 5:
-                score += 1
-            if sentiment_data['persuasiveness'] >= 5:
-                score += 1
-            
-            if score == 0 and (has_form or has_cta or contact_links):
-                score = 2
+            score = (4 if emails else 0) + (4 if phones else 0) + (2 if has_form else 0)
             
             return {
-                'url': url,
                 'emails': emails,
                 'phones': phones,
-                'contact_links': contact_links[:3],
                 'has_form': has_form,
-                'has_schema': has_schema,
-                'has_cta': has_cta,
-                'copy_quality_score': copy_quality,
-                'sentiment_score': sentiment_data['sentiment_score'],
-                'tone': sentiment_data['tone'],
-                'professionalism': sentiment_data['professionalism'],
-                'persuasiveness': sentiment_data['persuasiveness'],
                 'lead_score': min(score, 10)
             }
-            
-    except asyncio.TimeoutError:
-        logger.warning(f"⏱️ Timeout for {url}")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Error analyzing {url}: {str(e)}")
+    except:
         return None
 
-async def scrape_meta_ads_advanced(query, max_results=15):
-    """Scrape Meta Ads Library - 15 LEADS, 5-6 SCROLL"""
+async def scrape_meta_ads_fast(query, max_results=20):
+    """Meta Ads - 4 SCROLL VELOCI"""
     logger.info(f"🎯 META ADS: '{query}'")
     results = []
     
@@ -283,8 +114,7 @@ async def scrape_meta_ads_advanced(query, max_results=15):
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
                 user_agent=get_random_user_agent(),
-                viewport={'width': 1920, 'height': 1080},
-                locale='it-IT'
+                viewport={'width': 1920, 'height': 1080}
             )
             page = await context.new_page()
             
@@ -294,221 +124,146 @@ async def scrape_meta_ads_advanced(query, max_results=15):
                 f"&q={quote_plus(query)}&search_type=keyword_unordered"
             )
             
-            logger.info(f"📍 URL: {search_url}")
-            await page.goto(search_url, timeout=45000, wait_until='domcontentloaded')
+            await page.goto(search_url, timeout=30000, wait_until='domcontentloaded')
             await page.wait_for_timeout(3000)
             
             external_urls = set()
             
-            # 6 SCROLL per trovare più lead
-            for scroll_num in range(6):
-                logger.info(f"📜 Scroll {scroll_num + 1}/6")
+            # SOLO 4 SCROLL
+            for scroll in range(4):
+                logger.info(f"📜 Meta {scroll+1}/4")
                 
                 content = await page.content()
                 soup = BeautifulSoup(content, 'html.parser')
                 
-                annunci = soup.find_all('div', class_='xh8yej3')
-                logger.info(f"📦 Annunci: {len(annunci)}")
-                
-                for annuncio in annunci:
-                    links = annuncio.find_all('a', href=True)
-                    for link in links:
-                        href = link.get('href', '')
-                        
-                        if 'l.facebook.com' in href or 'l.php' in href:
-                            href = decode_fb_redirect(href)
-                        
-                        if is_valid_lead_url(href):
+                # Estrai tutti i link
+                for link in soup.find_all('a', href=True):
+                    href = link.get('href', '')
+                    
+                    if 'l.facebook.com' in href or 'l.php' in href:
+                        href = decode_fb_redirect(href)
+                    
+                    if href.startswith('http') and is_valid_lead_url(href):
+                        if not any(fb in href for fb in ['facebook.com', 'instagram.com']):
                             external_urls.add(href)
-                            logger.info(f"✅ Lead: {href}")
                 
                 if len(external_urls) >= max_results:
-                    logger.info(f"🎯 Raggiunto limite {max_results}")
                     break
                 
-                await page.evaluate('window.scrollBy(0, 1000)')
-                await page.wait_for_timeout(1800)
+                await page.evaluate('window.scrollBy(0, 1500)')
+                await page.wait_for_timeout(1200)
             
             await browser.close()
             
             for url in list(external_urls)[:max_results]:
                 results.append({
-                    'platform': 'Meta Ads Italy',
+                    'platform': 'Meta Ads',
                     'url': url,
-                    'query': query,
-                    'found_at': datetime.now().isoformat()
+                    'query': query
                 })
-            
-    except Exception as e:
-        logger.error(f"❌ Meta Ads: {str(e)}")
     
-    logger.info(f"🎉 META: {len(results)} lead")
+    except Exception as e:
+        logger.error(f"❌ Meta: {str(e)}")
+    
+    logger.info(f"✅ META: {len(results)}")
     return results
 
-async def scrape_linkedin_italy(query, max_results=10):
-    """Scrape LinkedIn aziende italiane - 10 LEADS"""
-    logger.info(f"💼 LINKEDIN: '{query}'")
-    results = []
-    
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
-                user_agent=get_random_user_agent(),
-                locale='it-IT'
-            )
-            page = await context.new_page()
-            
-            search_query = f"{query} italia"
-            search_url = f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(search_query)}&origin=GLOBAL_SEARCH_HEADER"
-            
-            logger.info(f"📍 URL: {search_url}")
-            
-            try:
-                await page.goto(search_url, timeout=30000, wait_until='domcontentloaded')
-                await page.wait_for_timeout(3000)
-                
-                # Scroll per caricare più risultati
-                for _ in range(2):
-                    await page.evaluate('window.scrollBy(0, 800)')
-                    await page.wait_for_timeout(1500)
-                
-                content = await page.content()
-                soup = BeautifulSoup(content, 'html.parser')
-                
-                company_links = []
-                company_links += soup.find_all('a', href=re.compile(r'/company/'))
-                company_links += soup.find_all('a', {'data-test-app-aware-link': True})
-                
-                seen_companies = set()
-                
-                for link in company_links:
-                    href = link.get('href', '')
-                    
-                    if '/company/' in href:
-                        company_url = href.split('?')[0]
-                        if 'linkedin.com' not in company_url:
-                            company_url = 'https://www.linkedin.com' + company_url
-                        
-                        if company_url not in seen_companies:
-                            seen_companies.add(company_url)
-                            results.append({
-                                'platform': 'LinkedIn Italy',
-                                'url': company_url,
-                                'query': query,
-                                'found_at': datetime.now().isoformat()
-                            })
-                            logger.info(f"✅ Company: {company_url}")
-                    
-                    elif href.startswith('http') and is_valid_lead_url(href):
-                        if href not in seen_companies:
-                            seen_companies.add(href)
-                            results.append({
-                                'platform': 'LinkedIn Italy',
-                                'url': href,
-                                'query': query,
-                                'found_at': datetime.now().isoformat()
-                            })
-                            logger.info(f"✅ External: {href}")
-                    
-                    if len(results) >= max_results:
-                        break
-                
-            except Exception as e:
-                logger.warning(f"⚠️ LinkedIn navigation: {str(e)}")
-            
-            await browser.close()
-            
-    except Exception as e:
-        logger.error(f"❌ LinkedIn: {str(e)}")
-    
-    logger.info(f"🎉 LINKEDIN: {len(results)} lead")
-    return results
-
-async def scrape_google_italy(query, max_results=15):
-    """Scrape Google.it - 15 LEADS con 2 pagine"""
+async def scrape_google_fast(query, max_results=15):
+    """Google - SOLO REQUESTS (no Playwright)"""
     logger.info(f"🔍 GOOGLE: '{query}'")
     results = []
     
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(
-                user_agent=get_random_user_agent(),
-                locale='it-IT'
-            )
-            page = await context.new_page()
+        async with aiohttp.ClientSession() as session:
+            search_query = f"{query} italia azienda"
+            url = f"https://www.google.it/search?q={quote_plus(search_query)}&num=30&hl=it"
             
-            seen_domains = defaultdict(int)
-            
-            # SCRAPE 2 PAGINE DI GOOGLE
-            for page_num in range(2):
-                start_param = page_num * 10
-                commercial_query = f"{query} azienda servizio italia"
-                search_url = f"https://www.google.it/search?q={quote_plus(commercial_query)}&num=30&start={start_param}&hl=it&gl=it"
+            async with session.get(
+                url,
+                headers={'User-Agent': get_random_user_agent()},
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
                 
-                logger.info(f"📍 Pagina {page_num + 1}: {search_url}")
+                seen = set()
                 
-                try:
-                    await page.goto(search_url, timeout=35000, wait_until='domcontentloaded')
-                    await page.wait_for_timeout(3000)
-                except Exception as e:
-                    logger.warning(f"⚠️ Timeout pagina {page_num + 1}")
-                    continue
-                
-                content = await page.content()
-                soup = BeautifulSoup(content, 'html.parser')
-                
-                search_results = soup.find_all('div', class_='g')
-                
-                for result in search_results:
-                    link_elem = result.find('a', href=True)
-                    if link_elem:
-                        href = link_elem['href']
-                        
-                        if href.startswith('/url?q='):
-                            href = href.split('/url?q=')[1].split('&')[0]
-                        
-                        if is_valid_lead_url(href):
-                            domain = urlparse(href).netloc
-                            
-                            # Max 3 URL per dominio
-                            if seen_domains[domain] < 3:
-                                results.append({
-                                    'platform': 'Google Italy',
-                                    'url': href,
-                                    'query': query,
-                                    'found_at': datetime.now().isoformat()
-                                })
-                                seen_domains[domain] += 1
-                                logger.info(f"✅ Lead: {href}")
+                # Cerca link nei risultati
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    
+                    if href.startswith('/url?q='):
+                        href = href.split('/url?q=')[1].split('&')[0]
+                    
+                    if is_valid_lead_url(href):
+                        domain = urlparse(href).netloc
+                        if domain not in seen:
+                            seen.add(domain)
+                            results.append({
+                                'platform': 'Google',
+                                'url': href,
+                                'query': query
+                            })
                     
                     if len(results) >= max_results:
                         break
-                
-                if len(results) >= max_results:
-                    break
-                
-                # Pausa tra pagine
-                await page.wait_for_timeout(2000)
-            
-            await browser.close()
-            
+    
     except Exception as e:
         logger.error(f"❌ Google: {str(e)}")
     
-    logger.info(f"🎉 GOOGLE: {len(results)} lead")
+    logger.info(f"✅ GOOGLE: {len(results)}")
+    return results
+
+async def scrape_bing_fast(query, max_results=15):
+    """Bing come alternativa veloce"""
+    logger.info(f"🔎 BING: '{query}'")
+    results = []
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://www.bing.com/search?q={quote_plus(query + ' italia')}&setlang=it"
+            
+            async with session.get(
+                url,
+                headers={'User-Agent': get_random_user_agent()},
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as response:
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                seen = set()
+                
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    
+                    if is_valid_lead_url(href):
+                        domain = urlparse(href).netloc
+                        if domain not in seen:
+                            seen.add(domain)
+                            results.append({
+                                'platform': 'Bing',
+                                'url': href,
+                                'query': query
+                            })
+                    
+                    if len(results) >= max_results:
+                        break
+    
+    except Exception as e:
+        logger.error(f"❌ Bing: {str(e)}")
+    
+    logger.info(f"✅ BING: {len(results)}")
     return results
 
 async def scrape_all_platforms(query):
-    """Orchestrazione scraping - TARGET 20-30 LEAD"""
+    """ULTRA-VELOCE: 30-40s totali"""
     logger.info(f"🚀 START: '{query}'")
     
-    # Scraping parallelo con limiti aumentati
+    # Scraping parallelo
     tasks = [
-        scrape_meta_ads_advanced(query, max_results=15),
-        scrape_linkedin_italy(query, max_results=10),
-        scrape_google_italy(query, max_results=15)
+        scrape_meta_ads_fast(query, 20),
+        scrape_google_fast(query, 15),
+        scrape_bing_fast(query, 15)
     ]
     
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -517,8 +272,6 @@ async def scrape_all_platforms(query):
     for platform_results in results:
         if isinstance(platform_results, list):
             all_leads.extend(platform_results)
-        else:
-            logger.error(f"❌ Error: {platform_results}")
     
     # Deduplica
     seen_urls = set()
@@ -528,43 +281,43 @@ async def scrape_all_platforms(query):
             seen_urls.add(lead['url'])
             unique_leads.append(lead)
     
-    logger.info(f"📊 Lead unici pre-analisi: {len(unique_leads)}")
+    logger.info(f"📊 Lead unici: {len(unique_leads)}")
     
-    # Analisi landing pages (parallela ma con timeout ridotto)
+    # Analisi SOLO dei primi 20 lead (risparmia tempo)
     async with aiohttp.ClientSession() as session:
-        analysis_tasks = [
-            analyze_landing_page(lead['url'], session) 
-            for lead in unique_leads
-        ]
-        analyses = await asyncio.gather(*analysis_tasks, return_exceptions=True)
+        top_leads = unique_leads[:20]
         
-        final_leads = []
-        for lead, analysis in zip(unique_leads, analyses):
-            if isinstance(analysis, dict) and analysis:
+        analyses = await asyncio.gather(
+            *[quick_analyze(lead['url'], session) for lead in top_leads],
+            return_exceptions=True
+        )
+        
+        # Lead con analisi
+        for lead, analysis in zip(top_leads, analyses):
+            if isinstance(analysis, dict):
                 lead.update(analysis)
             else:
-                # Analisi fallita → dati default
                 lead.update({
                     'emails': [],
                     'phones': [],
-                    'contact_links': [],
                     'has_form': False,
-                    'has_schema': False,
-                    'has_cta': False,
-                    'copy_quality_score': 0,
-                    'sentiment_score': 0,
-                    'tone': 'unknown',
-                    'professionalism': 0,
-                    'persuasiveness': 0,
                     'lead_score': 0
                 })
-            final_leads.append(lead)
+        
+        # Lead rimanenti senza analisi
+        for lead in unique_leads[20:]:
+            lead.update({
+                'emails': [],
+                'phones': [],
+                'has_form': False,
+                'lead_score': 0
+            })
     
-    # Ordina per lead_score
-    final_leads.sort(key=lambda x: x.get('lead_score', 0), reverse=True)
+    # Ordina per score
+    unique_leads.sort(key=lambda x: x.get('lead_score', 0), reverse=True)
     
-    logger.info(f"✨ FINAL: {len(final_leads)} lead totali")
-    return final_leads
+    logger.info(f"✨ FINAL: {len(unique_leads)} lead")
+    return unique_leads
 
 @app.route('/')
 def index():
@@ -592,18 +345,11 @@ def scrape():
         
         scraped_data = results
         
-        logger.info(f"✅ DONE: {len(results)} lead")
-        
-        response = jsonify({
+        return jsonify({
             'success': True,
             'count': len(results),
             'leads': results
         })
-        
-        response.headers['Content-Type'] = 'application/json'
-        response.headers['X-Content-Type-Options'] = 'nosniff'
-        
-        return response
         
     except Exception as e:
         logger.error(f"❌ ERROR: {str(e)}", exc_info=True)
@@ -619,14 +365,11 @@ def export_csv():
     global scraped_data
     
     if not scraped_data:
-        return jsonify({'error': 'Nessun dato da esportare'}), 400
+        return jsonify({'error': 'Nessun dato'}), 400
     
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=[
-        'platform', 'url', 'query', 'found_at', 'emails', 'phones',
-        'contact_links', 'has_form', 'has_schema', 'has_cta',
-        'copy_quality_score', 'sentiment_score', 'tone', 
-        'professionalism', 'persuasiveness', 'lead_score'
+        'platform', 'url', 'query', 'emails', 'phones', 'has_form', 'lead_score'
     ])
     
     writer.writeheader()
@@ -634,7 +377,6 @@ def export_csv():
         row_copy = row.copy()
         row_copy['emails'] = '; '.join(row_copy.get('emails', []))
         row_copy['phones'] = '; '.join(row_copy.get('phones', []))
-        row_copy['contact_links'] = '; '.join(row_copy.get('contact_links', []))
         writer.writerow(row_copy)
     
     output.seek(0)
@@ -642,7 +384,7 @@ def export_csv():
         io.BytesIO(output.getvalue().encode('utf-8')),
         mimetype='text/csv',
         as_attachment=True,
-        download_name=f'leads_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        download_name=f'leads_{datetime.now().strftime("%Y%m%d_%H%M")}.csv'
     )
 
 @app.route('/export/json')
@@ -650,13 +392,13 @@ def export_json():
     global scraped_data
     
     if not scraped_data:
-        return jsonify({'error': 'Nessun dato da esportare'}), 400
+        return jsonify({'error': 'Nessun dato'}), 400
     
     return send_file(
         io.BytesIO(json.dumps(scraped_data, indent=2).encode('utf-8')),
         mimetype='application/json',
         as_attachment=True,
-        download_name=f'leads_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+        download_name=f'leads_{datetime.now().strftime("%Y%m%d_%H%M")}.json'
     )
 
 if __name__ == '__main__':

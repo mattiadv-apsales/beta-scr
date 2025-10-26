@@ -212,6 +212,7 @@
 
         .badge-meta { background: #3b5998; color: white; }
         .badge-google { background: #4285f4; color: white; }
+        .badge-bing { background: #008373; color: white; }
 
         .score-badge {
             padding: 8px 16px;
@@ -228,6 +229,7 @@
             word-break: break-all;
             display: block;
             margin-bottom: 15px;
+            font-size: 14px;
         }
 
         .lead-url:hover {
@@ -236,8 +238,8 @@
 
         .lead-details {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
             margin-top: 15px;
             padding-top: 15px;
             border-top: 2px solid #f0f0f0;
@@ -246,7 +248,7 @@
         .detail-item {
             display: flex;
             flex-direction: column;
-            gap: 5px;
+            gap: 8px;
         }
 
         .detail-label {
@@ -254,6 +256,7 @@
             color: #999;
             text-transform: uppercase;
             font-weight: 600;
+            letter-spacing: 0.5px;
         }
 
         .detail-value {
@@ -264,13 +267,15 @@
         .contact-list {
             list-style: none;
             padding: 0;
+            margin: 0;
         }
 
         .contact-list li {
-            padding: 4px 0;
+            padding: 6px 0;
             color: #667eea;
             font-size: 13px;
             word-break: break-all;
+            line-height: 1.4;
         }
 
         .badge-yes, .badge-no {
@@ -283,6 +288,12 @@
 
         .badge-yes { background: #10b981; color: white; }
         .badge-no { background: #ef4444; color: white; }
+
+        .no-data {
+            color: #999;
+            font-size: 13px;
+            font-style: italic;
+        }
 
         .error-message {
             display: none;
@@ -308,6 +319,9 @@
             .search-card {
                 padding: 25px;
             }
+            .lead-details {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -315,7 +329,7 @@
     <div class="container">
         <div class="header">
             <h1>🇮🇹 Lead Scraper Pro</h1>
-            <p>Trova lead italiani da Meta Ads Library e Google Search</p>
+            <p>Trova lead italiani da Meta Ads, Google e Bing</p>
         </div>
 
         <div class="search-card">
@@ -324,7 +338,7 @@
                     type="text" 
                     id="queryInput" 
                     class="search-input" 
-                    placeholder='Inserisci query (es: "lezione gratuita", "corso online", "consulenza gratis")'
+                    placeholder='Inserisci query (es: "corso online", "consulenza aziendale", "servizi professionali")'
                     autocomplete="off"
                 >
                 <button id="scrapeBtn" class="btn btn-primary">🚀 Avvia Scraping</button>
@@ -334,7 +348,7 @@
 
             <div id="loader" class="loader">
                 <div class="spinner"></div>
-                <div class="loader-text">Scraping in corso... Può richiedere 2-5 minuti ⏱️</div>
+                <div class="loader-text">Scraping in corso... 30-45 secondi ⚡</div>
             </div>
 
             <div id="stats" class="stats">
@@ -415,7 +429,7 @@
                 }
 
                 if (!data.leads || data.leads.length === 0) {
-                    showError('Nessun lead italiano trovato. Prova con una query diversa (es: "lezione gratuita", "corso online")');
+                    showError('Nessun lead trovato. Prova con: "corso online", "consulenza aziendale", "marketing digitale"');
                     return;
                 }
 
@@ -448,61 +462,51 @@
             const card = document.createElement('div');
             card.className = 'lead-card';
 
-            const platformClass = lead.platform.toLowerCase().includes('meta') ? 'badge-meta' : 'badge-google';
+            // Determina badge piattaforma
+            let platformClass = 'badge-google';
+            if (lead.platform && lead.platform.toLowerCase().includes('meta')) {
+                platformClass = 'badge-meta';
+            } else if (lead.platform && lead.platform.toLowerCase().includes('bing')) {
+                platformClass = 'badge-bing';
+            }
 
-            const emails = lead.emails && lead.emails.length > 0 
+            // Email (con fallback se array vuoto)
+            const emails = (lead.emails && Array.isArray(lead.emails) && lead.emails.length > 0)
                 ? `<ul class="contact-list">${lead.emails.map(e => `<li>📧 ${e}</li>`).join('')}</ul>`
-                : '<span style="color: #999;">Nessuna</span>';
+                : '<span class="no-data">Nessuna email</span>';
 
-            const phones = lead.phones && lead.phones.length > 0 
+            // Telefoni (con fallback se array vuoto)
+            const phones = (lead.phones && Array.isArray(lead.phones) && lead.phones.length > 0)
                 ? `<ul class="contact-list">${lead.phones.map(p => `<li>📱 ${p}</li>`).join('')}</ul>`
-                : '<span style="color: #999;">Nessuno</span>';
+                : '<span class="no-data">Nessun telefono</span>';
 
-            const contacts = lead.contact_links && lead.contact_links.length > 0 
-                ? `<ul class="contact-list">${lead.contact_links.slice(0, 2).map(c => `<li><a href="${c}" target="_blank" style="color: #667eea;">🔗 ${c}</a></li>`).join('')}</ul>`
-                : '<span style="color: #999;">Nessuno</span>';
+            // Form contatto
+            const hasForm = lead.has_form === true;
 
             card.innerHTML = `
                 <div class="lead-header">
                     <div>
-                        <span class="platform-badge ${platformClass}">${lead.platform}</span>
-                        ${lead.cms ? `<span class="platform-badge" style="background: #6366f1; color: white; margin-left: 8px;">${lead.cms}</span>` : ''}
+                        <span class="platform-badge ${platformClass}">${lead.platform || 'Unknown'}</span>
                     </div>
-                    <span class="score-badge">⭐ ${lead.lead_score || 0}/10</span>
+                    <span class="score-badge">⭐ Score: ${lead.lead_score || 0}/10</span>
                 </div>
                 <a href="${lead.url}" target="_blank" class="lead-url">${lead.url}</a>
                 <div class="lead-details">
                     <div class="detail-item">
-                        <span class="detail-label">📧 Email</span>
+                        <span class="detail-label">📧 Email Trovate</span>
                         <div class="detail-value">${emails}</div>
                     </div>
                     <div class="detail-item">
-                        <span class="detail-label">📱 Telefoni</span>
+                        <span class="detail-label">📱 Telefoni Trovati</span>
                         <div class="detail-value">${phones}</div>
                     </div>
                     <div class="detail-item">
-                        <span class="detail-label">🔗 Pagine Contatto</span>
-                        <div class="detail-value">${contacts}</div>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">📝 Form Contatto</span>
+                        <span class="detail-label">📝 Form di Contatto</span>
                         <div class="detail-value">
-                            <span class="${lead.has_form ? 'badge-yes' : 'badge-no'}">
-                                ${lead.has_form ? 'Sì' : 'No'}
+                            <span class="${hasForm ? 'badge-yes' : 'badge-no'}">
+                                ${hasForm ? '✓ Presente' : '✗ Assente'}
                             </span>
                         </div>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">🎯 CTA Presente</span>
-                        <div class="detail-value">
-                            <span class="${lead.has_cta ? 'badge-yes' : 'badge-no'}">
-                                ${lead.has_cta ? 'Sì' : 'No'}
-                            </span>
-                        </div>
-                    </div>
-                    <div class="detail-item">
-                        <span class="detail-label">✍️ Qualità Copy</span>
-                        <div class="detail-value">${lead.copy_quality_score || 0}/10</div>
                     </div>
                 </div>
             `;
@@ -512,8 +516,18 @@
 
         function updateStats(leads) {
             const totalLeads = leads.length;
-            const emailCount = leads.filter(l => l.emails && l.emails.length > 0).length;
-            const phoneCount = leads.filter(l => l.phones && l.phones.length > 0).length;
+            
+            // Conta lead con email (gestisce array vuoti)
+            const emailCount = leads.filter(l => 
+                l.emails && Array.isArray(l.emails) && l.emails.length > 0
+            ).length;
+            
+            // Conta lead con telefoni (gestisce array vuoti)
+            const phoneCount = leads.filter(l => 
+                l.phones && Array.isArray(l.phones) && l.phones.length > 0
+            ).length;
+            
+            // Calcola score medio
             const avgScore = totalLeads > 0 
                 ? (leads.reduce((sum, l) => sum + (l.lead_score || 0), 0) / totalLeads).toFixed(1)
                 : 0;
