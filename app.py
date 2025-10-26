@@ -479,6 +479,8 @@ async def scrape_google_italy(query, max_results=10):
             try:
                 await page.goto(search_url, timeout=45000, wait_until='domcontentloaded')
                 await page.wait_for_timeout(4000)
+            except:
+                print("hjgkjhgkjhg")
             
             content = await page.content()
             soup = BeautifulSoup(content, 'html.parser')
