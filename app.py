@@ -63,10 +63,11 @@ def is_valid_lead_url(url):
         domain = parsed.netloc.lower()
         path = parsed.path.lower()
         
-        # Blocca SOLO social network principali
-        blocked_social = ['facebook.com', 'fb.com', 'instagram.com', 'twitter.com', 
-                         'x.com', 'youtube.com', 'tiktok.com', 'linkedin.com/in/']
-        if any(blocked in domain for blocked in blocked_social):
+        # Blocca SOLO social network principali e metastatus
+        blocked_social = ['facebook.com', 'fb.com', 'fb.me', 'instagram.com', 
+                         'twitter.com', 'x.com', 'youtube.com', 'tiktok.com', 
+                         'linkedin.com/in/', 'metastatus.com']
+        if any(blocked in domain or blocked in url.lower() for blocked in blocked_social):
             return False
         
         # Blocca SOLO path pericolosi
@@ -78,7 +79,7 @@ def is_valid_lead_url(url):
         if '.' not in domain or domain.startswith('localhost'):
             return False
         
-        # ACCETTA TUTTO - nessun filtro geografico restrittivo
+        # ACCETTA TUTTO il resto
         return True
             
     except:
@@ -274,12 +275,32 @@ async def analyze_landing_page(url, session):
             # SENTIMENT & TONE ANALYSIS
             sentiment_data = analyze_sentiment_tone(text[:3000])
             
-            # Lead score
+            # LEAD SCORE MIGLIORATO (0-10) - Più generoso
             score = 0
-            if emails: score += 4
-            if phones: score += 3
-            if contact_links: score += 2
-            if has_form: score += 1
+            
+            # Email/Telefoni trovati (pesano molto)
+            if emails: 
+                score += 3  # Era 4
+            if phones: 
+                score += 3  # Era 3
+            
+            # Elementi contatto (bonus aggiuntivi)
+            if contact_links: 
+                score += 2
+            if has_form: 
+                score += 2  # Era 1
+            
+            # Bonus per qualità contenuto
+            if has_cta:
+                score += 1
+            if copy_quality >= 5:
+                score += 1
+            if sentiment_data['persuasiveness'] >= 5:
+                score += 1
+            
+            # Anche senza contatti, se ha form/CTA merita punti
+            if score == 0 and (has_form or has_cta or contact_links):
+                score = 2  # Score minimo se c'è almeno qualcosa
             
             return {
                 'url': url,
@@ -480,7 +501,7 @@ async def scrape_google_italy(query, max_results=10):
                 await page.goto(search_url, timeout=45000, wait_until='domcontentloaded')
                 await page.wait_for_timeout(4000)
             except:
-                print("hjgkjhgkjhg")
+                print("hjgjkhgkjhgkg")
             
             content = await page.content()
             soup = BeautifulSoup(content, 'html.parser')
@@ -567,13 +588,34 @@ async def scrape_all_platforms(query):
                 lead.update(analysis)
                 enriched_leads.append(lead)
     
-    # Ordina per lead_score
-    enriched_leads.sort(key=lambda x: x.get('lead_score', 0), reverse=True)
+    # TIENI TUTTI I LEAD, anche con score 0
+    final_leads = []
+    for lead, analysis in zip(unique_leads, analyses):
+        if isinstance(analysis, dict) and analysis:
+            lead.update(analysis)
+        else:
+            # Analisi fallita → dati default ma lead valido
+            lead.update({
+                'emails': [],
+                'phones': [],
+                'contact_links': [],
+                'has_form': False,
+                'has_schema': False,
+                'has_cta': False,
+                'copy_quality_score': 0,
+                'sentiment_score': 0,
+                'tone': 'unknown',
+                'professionalism': 0,
+                'persuasiveness': 0,
+                'lead_score': 0  # Score 0 va bene, lo teniamo comunque
+            })
+        final_leads.append(lead)
     
-    quality_leads = [l for l in enriched_leads if l.get('lead_score', 0) > 0]
+    # Ordina per lead_score (più alto prima)
+    final_leads.sort(key=lambda x: x.get('lead_score', 0), reverse=True)
     
-    logger.info(f"✨ FINAL: {len(quality_leads)} quality lead")
-    return quality_leads
+    logger.info(f"✨ FINAL: {len(final_leads)} lead (inclusi score 0)")
+    return final_leads
 
 @app.route('/')
 def index():
