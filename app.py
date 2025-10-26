@@ -4,6 +4,7 @@ import re
 import json
 import csv
 import io
+import os
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, urljoin, quote_plus, parse_qs, unquote
 import random
@@ -25,19 +26,6 @@ USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
 ]
 
-BLOCKED_DOMAINS = {
-    'facebook.com', 'fb.com', 'fbcdn.net', 'instagram.com', 'messenger.com', 'fb.me',
-    'twitter.com', 'x.com', 'reddit.com', 'youtube.com', 'youtu.be', 
-    'tiktok.com', 'pinterest.com', 'bit.ly', 't.co', 'goo.gl', 'ow.ly', 'tinyurl.com',
-    'support.', 'help.', 'transparency.', 'policies.', 'terms.', 'privacy.', 
-    'legal.', 'cookie.', 'reddithelp.com', 'metastatus.com'
-}
-
-ITALIAN_CITIES = [
-    'roma', 'milano', 'torino', 'napoli', 'firenze', 'bologna', 
-    'venezia', 'palermo', 'genova', 'bari', 'catania', 'verona'
-]
-
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
 
@@ -54,7 +42,7 @@ def decode_fb_redirect(href):
     return href
 
 def is_valid_lead_url(url):
-    """Verifica che sia un URL valido - FILTRO SOFT ma senza Google Forms"""
+    """Verifica che sia un URL valido - FILTRO SOFT"""
     if not url or not url.startswith('http'):
         return False
     
@@ -63,14 +51,14 @@ def is_valid_lead_url(url):
         domain = parsed.netloc.lower()
         path = parsed.path.lower()
         
-        # Blocca social network, forms e utility
+        # Blocca solo social network principali e forms
         blocked_domains = [
             'facebook.com', 'fb.com', 'fb.me', 'instagram.com', 
             'twitter.com', 'x.com', 'youtube.com', 'tiktok.com', 
             'linkedin.com/in/', 'metastatus.com',
-            'forms.gle', 'google.com/forms',  # Google Forms
-            'docs.google.com/forms',  # Google Forms alternate
-            'typeform.com', 'surveymonkey.com',  # Altri form builders
+            'forms.gle', 'google.com/forms',
+            'docs.google.com/forms',
+            'typeform.com', 'surveymonkey.com',
         ]
         
         url_lower = url.lower()
@@ -82,7 +70,6 @@ def is_valid_lead_url(url):
         if any(blocked in path for blocked in blocked_paths):
             return False
         
-        # Deve avere un dominio valido
         if '.' not in domain or domain.startswith('localhost'):
             return False
         
@@ -116,7 +103,7 @@ def extract_phones(text):
     return list(set(phones))[:5]
 
 def analyze_sentiment_tone(text):
-    """Analisi sentiment e tone of voice (0-10 per categoria)"""
+    """Analisi sentiment e tone of voice"""
     if not text or len(text) < 50:
         return {
             'sentiment_score': 0,
@@ -127,7 +114,6 @@ def analyze_sentiment_tone(text):
     
     text_lower = text.lower()
     
-    # SENTIMENT (positivo/negativo)
     positive_words = ['eccellente', 'ottimo', 'migliore', 'garantito', 'successo', 
                      'innovativo', 'leader', 'qualità', 'professionale', 'affidabile']
     negative_words = ['problema', 'difficoltà', 'errore', 'fallimento', 'negativo']
@@ -137,7 +123,6 @@ def analyze_sentiment_tone(text):
     
     sentiment_score = min((pos_count - neg_count + 5), 10)
     
-    # TONE OF VOICE
     formal_indicators = ['inoltre', 'pertanto', 'qualora', 'mediante', 'gentile cliente']
     casual_indicators = ['ciao', 'hey', 'dai', 'fantastico', 'wow']
     commercial_indicators = ['acquista', 'offerta', 'sconto', 'risparmia', 'promo']
@@ -155,12 +140,10 @@ def analyze_sentiment_tone(text):
     else:
         tone = 'neutral'
     
-    # PROFESSIONALITÀ (0-10)
     prof_indicators = ['esperienza', 'competenza', 'certificato', 'qualificato', 
                       'professionale', 'team', 'consulenza']
     professionalism = min(sum(1 for word in prof_indicators if word in text_lower) * 2, 10)
     
-    # PERSUASIVITÀ (0-10)
     persuasive_indicators = ['prova', 'scopri', 'richiedi', 'garantito', 'limitato', 
                             'esclusivo', 'gratis', 'ora']
     persuasiveness = min(sum(1 for word in persuasive_indicators if word in text_lower) * 1.5, 10)
@@ -201,33 +184,6 @@ def calculate_copy_quality(text):
     
     return min(score, 10)
 
-def extract_date_from_ad(text):
-    """Estrai data pubblicazione annuncio Meta"""
-    try:
-        match = re.search(
-            r"Data di inizio della pubblicazione:\s*(\d{1,2})\s([a-z]{3})\s(\d{4})", 
-            text, re.IGNORECASE
-        )
-        if not match:
-            return None
-        
-        giorno = int(match.group(1))
-        mese_str = match.group(2).lower()
-        anno = int(match.group(3))
-        
-        mesi = {
-            "gen":1, "feb":2, "mar":3, "apr":4, "mag":5, "giu":6,
-            "lug":7, "ago":8, "set":9, "ott":10, "nov":11, "dic":12
-        }
-        mese = mesi.get(mese_str)
-        
-        if not mese:
-            return None
-        
-        return datetime(anno, mese, giorno).date()
-    except:
-        return None
-
 async def analyze_landing_page(url, session):
     """Analizza landing page per estrarre dati di contatto, metriche e sentiment"""
     try:
@@ -235,7 +191,7 @@ async def analyze_landing_page(url, session):
         
         async with session.get(
             url, 
-            timeout=aiohttp.ClientTimeout(total=15), 
+            timeout=aiohttp.ClientTimeout(total=12), 
             headers={'User-Agent': get_random_user_agent()},
             allow_redirects=True
         ) as response:
@@ -249,11 +205,9 @@ async def analyze_landing_page(url, session):
             
             text = soup.get_text(separator=' ', strip=True)
             
-            # Contatti
             emails = extract_emails(text)
             phones = extract_phones(text)
             
-            # Link contatto
             contact_links = []
             for link in soup.find_all('a', href=True):
                 href = link['href'].lower()
@@ -264,7 +218,6 @@ async def analyze_landing_page(url, session):
                     if is_valid_lead_url(full_url):
                         contact_links.append(full_url)
             
-            # Metriche
             has_form = bool(soup.find('form'))
             has_schema = bool(soup.find('script', type='application/ld+json'))
             
@@ -275,28 +228,18 @@ async def analyze_landing_page(url, session):
             )
             has_cta = len(cta_elements) > 0
             
-            # Qualità copy
             copy_quality = calculate_copy_quality(text[:3000])
-            
-            # SENTIMENT & TONE ANALYSIS
             sentiment_data = analyze_sentiment_tone(text[:3000])
             
-            # LEAD SCORE MIGLIORATO (0-10) - Più generoso
             score = 0
-            
-            # Email/Telefoni trovati (pesano molto)
             if emails: 
-                score += 3  # Era 4
+                score += 3
             if phones: 
-                score += 3  # Era 3
-            
-            # Elementi contatto (bonus aggiuntivi)
+                score += 3
             if contact_links: 
                 score += 2
             if has_form: 
-                score += 2  # Era 1
-            
-            # Bonus per qualità contenuto
+                score += 2
             if has_cta:
                 score += 1
             if copy_quality >= 5:
@@ -304,9 +247,8 @@ async def analyze_landing_page(url, session):
             if sentiment_data['persuasiveness'] >= 5:
                 score += 1
             
-            # Anche senza contatti, se ha form/CTA merita punti
             if score == 0 and (has_form or has_cta or contact_links):
-                score = 2  # Score minimo se c'è almeno qualcosa
+                score = 2
             
             return {
                 'url': url,
@@ -331,8 +273,8 @@ async def analyze_landing_page(url, session):
         logger.error(f"❌ Error analyzing {url}: {str(e)}")
         return None
 
-async def scrape_meta_ads_advanced(query, max_results=10):
-    """Scrape Meta Ads Library - ULTIMI 3 GIORNI, MAX 3-4 SCROLL"""
+async def scrape_meta_ads_advanced(query, max_results=15):
+    """Scrape Meta Ads Library - 15 LEADS, 5-6 SCROLL"""
     logger.info(f"🎯 META ADS: '{query}'")
     results = []
     
@@ -354,15 +296,13 @@ async def scrape_meta_ads_advanced(query, max_results=10):
             
             logger.info(f"📍 URL: {search_url}")
             await page.goto(search_url, timeout=45000, wait_until='domcontentloaded')
-            await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(3000)
             
             external_urls = set()
-            oggi = datetime.today().date()
-            limite_data = oggi - timedelta(days=3)  # ULTIMI 3 GIORNI
             
-            # MAX 3-4 SCROLL
-            for scroll_num in range(4):
-                logger.info(f"📜 Scroll {scroll_num + 1}/4")
+            # 6 SCROLL per trovare più lead
+            for scroll_num in range(6):
+                logger.info(f"📜 Scroll {scroll_num + 1}/6")
                 
                 content = await page.content()
                 soup = BeautifulSoup(content, 'html.parser')
@@ -371,7 +311,6 @@ async def scrape_meta_ads_advanced(query, max_results=10):
                 logger.info(f"📦 Annunci: {len(annunci)}")
                 
                 for annuncio in annunci:
-                    # NON blocchiamo più per data - prendiamo tutti i link
                     links = annuncio.find_all('a', href=True)
                     for link in links:
                         href = link.get('href', '')
@@ -387,8 +326,8 @@ async def scrape_meta_ads_advanced(query, max_results=10):
                     logger.info(f"🎯 Raggiunto limite {max_results}")
                     break
                 
-                await page.evaluate('window.scrollBy(0, 800)')
-                await page.wait_for_timeout(2000)
+                await page.evaluate('window.scrollBy(0, 1000)')
+                await page.wait_for_timeout(1800)
             
             await browser.close()
             
@@ -407,7 +346,7 @@ async def scrape_meta_ads_advanced(query, max_results=10):
     return results
 
 async def scrape_linkedin_italy(query, max_results=10):
-    """Scrape LinkedIn aziende italiane"""
+    """Scrape LinkedIn aziende italiane - 10 LEADS"""
     logger.info(f"💼 LINKEDIN: '{query}'")
     results = []
     
@@ -420,7 +359,6 @@ async def scrape_linkedin_italy(query, max_results=10):
             )
             page = await context.new_page()
             
-            # LinkedIn company search (public)
             search_query = f"{query} italia"
             search_url = f"https://www.linkedin.com/search/results/companies/?keywords={quote_plus(search_query)}&origin=GLOBAL_SEARCH_HEADER"
             
@@ -430,10 +368,14 @@ async def scrape_linkedin_italy(query, max_results=10):
                 await page.goto(search_url, timeout=30000, wait_until='domcontentloaded')
                 await page.wait_for_timeout(3000)
                 
+                # Scroll per caricare più risultati
+                for _ in range(2):
+                    await page.evaluate('window.scrollBy(0, 800)')
+                    await page.wait_for_timeout(1500)
+                
                 content = await page.content()
                 soup = BeautifulSoup(content, 'html.parser')
                 
-                # Cerca link aziende (selettori multipli)
                 company_links = []
                 company_links += soup.find_all('a', href=re.compile(r'/company/'))
                 company_links += soup.find_all('a', {'data-test-app-aware-link': True})
@@ -443,7 +385,6 @@ async def scrape_linkedin_italy(query, max_results=10):
                 for link in company_links:
                     href = link.get('href', '')
                     
-                    # Accetta sia link company che website esterni
                     if '/company/' in href:
                         company_url = href.split('?')[0]
                         if 'linkedin.com' not in company_url:
@@ -484,8 +425,8 @@ async def scrape_linkedin_italy(query, max_results=10):
     logger.info(f"🎉 LINKEDIN: {len(results)} lead")
     return results
 
-async def scrape_google_italy(query, max_results=10):
-    """Scrape Google.it per aziende italiane"""
+async def scrape_google_italy(query, max_results=15):
+    """Scrape Google.it - 15 LEADS con 2 pagine"""
     logger.info(f"🔍 GOOGLE: '{query}'")
     results = []
     
@@ -498,46 +439,58 @@ async def scrape_google_italy(query, max_results=10):
             )
             page = await context.new_page()
             
-            commercial_query = f"{query} azienda servizio italia"
-            search_url = f"https://www.google.it/search?q={quote_plus(commercial_query)}&num=30&hl=it&gl=it"
-            
-            logger.info(f"📍 URL: {search_url}")
-            
-            try:
-                await page.goto(search_url, timeout=45000, wait_until='domcontentloaded')
-                await page.wait_for_timeout(4000)
-            except:
-                print("LOL questa stringa mancava")
-            
-            content = await page.content()
-            soup = BeautifulSoup(content, 'html.parser')
-            
             seen_domains = defaultdict(int)
-            search_results = soup.find_all('div', class_='g')
             
-            for result in search_results:
-                link_elem = result.find('a', href=True)
-                if link_elem:
-                    href = link_elem['href']
-                    
-                    if href.startswith('/url?q='):
-                        href = href.split('/url?q=')[1].split('&')[0]
-                    
-                    if is_valid_lead_url(href):
-                        domain = urlparse(href).netloc
+            # SCRAPE 2 PAGINE DI GOOGLE
+            for page_num in range(2):
+                start_param = page_num * 10
+                commercial_query = f"{query} azienda servizio italia"
+                search_url = f"https://www.google.it/search?q={quote_plus(commercial_query)}&num=30&start={start_param}&hl=it&gl=it"
+                
+                logger.info(f"📍 Pagina {page_num + 1}: {search_url}")
+                
+                try:
+                    await page.goto(search_url, timeout=35000, wait_until='domcontentloaded')
+                    await page.wait_for_timeout(3000)
+                except Exception as e:
+                    logger.warning(f"⚠️ Timeout pagina {page_num + 1}")
+                    continue
+                
+                content = await page.content()
+                soup = BeautifulSoup(content, 'html.parser')
+                
+                search_results = soup.find_all('div', class_='g')
+                
+                for result in search_results:
+                    link_elem = result.find('a', href=True)
+                    if link_elem:
+                        href = link_elem['href']
                         
-                        if seen_domains[domain] < 2:
-                            results.append({
-                                'platform': 'Google Italy',
-                                'url': href,
-                                'query': query,
-                                'found_at': datetime.now().isoformat()
-                            })
-                            seen_domains[domain] += 1
-                            logger.info(f"✅ Lead: {href}")
+                        if href.startswith('/url?q='):
+                            href = href.split('/url?q=')[1].split('&')[0]
+                        
+                        if is_valid_lead_url(href):
+                            domain = urlparse(href).netloc
+                            
+                            # Max 3 URL per dominio
+                            if seen_domains[domain] < 3:
+                                results.append({
+                                    'platform': 'Google Italy',
+                                    'url': href,
+                                    'query': query,
+                                    'found_at': datetime.now().isoformat()
+                                })
+                                seen_domains[domain] += 1
+                                logger.info(f"✅ Lead: {href}")
+                    
+                    if len(results) >= max_results:
+                        break
                 
                 if len(results) >= max_results:
                     break
+                
+                # Pausa tra pagine
+                await page.wait_for_timeout(2000)
             
             await browser.close()
             
@@ -548,14 +501,14 @@ async def scrape_google_italy(query, max_results=10):
     return results
 
 async def scrape_all_platforms(query):
-    """Orchestrazione scraping - MAX 10 LEAD TOTALI"""
+    """Orchestrazione scraping - TARGET 20-30 LEAD"""
     logger.info(f"🚀 START: '{query}'")
     
-    # Scraping parallelo
+    # Scraping parallelo con limiti aumentati
     tasks = [
-        scrape_meta_ads_advanced(query, max_results=10),
+        scrape_meta_ads_advanced(query, max_results=15),
         scrape_linkedin_italy(query, max_results=10),
-        scrape_google_italy(query, max_results=10)
+        scrape_google_italy(query, max_results=15)
     ]
     
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -575,12 +528,9 @@ async def scrape_all_platforms(query):
             seen_urls.add(lead['url'])
             unique_leads.append(lead)
     
-    # LIMITA A 10 LEAD
-    unique_leads = unique_leads[:10]
+    logger.info(f"📊 Lead unici pre-analisi: {len(unique_leads)}")
     
-    logger.info(f"📊 Lead unici: {len(unique_leads)}")
-    
-    # Analisi landing pages
+    # Analisi landing pages (parallela ma con timeout ridotto)
     async with aiohttp.ClientSession() as session:
         analysis_tasks = [
             analyze_landing_page(lead['url'], session) 
@@ -588,39 +538,32 @@ async def scrape_all_platforms(query):
         ]
         analyses = await asyncio.gather(*analysis_tasks, return_exceptions=True)
         
-        enriched_leads = []
+        final_leads = []
         for lead, analysis in zip(unique_leads, analyses):
             if isinstance(analysis, dict) and analysis:
                 lead.update(analysis)
-                enriched_leads.append(lead)
+            else:
+                # Analisi fallita → dati default
+                lead.update({
+                    'emails': [],
+                    'phones': [],
+                    'contact_links': [],
+                    'has_form': False,
+                    'has_schema': False,
+                    'has_cta': False,
+                    'copy_quality_score': 0,
+                    'sentiment_score': 0,
+                    'tone': 'unknown',
+                    'professionalism': 0,
+                    'persuasiveness': 0,
+                    'lead_score': 0
+                })
+            final_leads.append(lead)
     
-    # TIENI TUTTI I LEAD, anche con score 0
-    final_leads = []
-    for lead, analysis in zip(unique_leads, analyses):
-        if isinstance(analysis, dict) and analysis:
-            lead.update(analysis)
-        else:
-            # Analisi fallita → dati default ma lead valido
-            lead.update({
-                'emails': [],
-                'phones': [],
-                'contact_links': [],
-                'has_form': False,
-                'has_schema': False,
-                'has_cta': False,
-                'copy_quality_score': 0,
-                'sentiment_score': 0,
-                'tone': 'unknown',
-                'professionalism': 0,
-                'persuasiveness': 0,
-                'lead_score': 0  # Score 0 va bene, lo teniamo comunque
-            })
-        final_leads.append(lead)
-    
-    # Ordina per lead_score (più alto prima)
+    # Ordina per lead_score
     final_leads.sort(key=lambda x: x.get('lead_score', 0), reverse=True)
     
-    logger.info(f"✨ FINAL: {len(final_leads)} lead (inclusi score 0)")
+    logger.info(f"✨ FINAL: {len(final_leads)} lead totali")
     return final_leads
 
 @app.route('/')
@@ -717,6 +660,5 @@ def export_json():
     )
 
 if __name__ == '__main__':
-    # Ottimizzato per Render
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
